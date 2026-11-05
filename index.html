@@ -37,7 +37,6 @@ button{background:#17669b;color:white;border:0;font-weight:bold}
 Контроль движения автобусов Таллинна
 </header>
 <main>
-
 <section class="panel">
 <h2>Выбор маршрутов (до 3)</h2>
 <input id="routeInput" type="number" min="1" placeholder="Номер маршрута">
@@ -50,7 +49,6 @@ button{background:#17669b;color:white;border:0;font-weight:bold}
 <div id="map"></div>
 <p id="gpsStatus" class="status">Подключение к GPS...</p>
 </section>
-
 <section class="panel">
 <h2>Цвета автобусов</h2>
 <div class="legend">
@@ -60,7 +58,6 @@ button{background:#17669b;color:white;border:0;font-weight:bold}
 <div class="item"><span class="dot gray"></span>Нет информации</div>
 </div>
 </section>
-
 <section class="panel">
 <h2>Передача смены</h2>
 <input id="busSearch" placeholder="Бортовой номер">
@@ -78,9 +75,8 @@ button{background:#17669b;color:white;border:0;font-weight:bold}
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
 const map=L.map('map').setView([59.437,24.7536],12);
-
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{
-attribution:'© OpenStreetMap'
+ attribution:'© OpenStreetMap'
 }).addTo(map);
 
 let selectedRoutes=['18'];
@@ -137,12 +133,16 @@ async function updateBuses(){
 
  try{
   const response=await fetch(
-   'https://nordapi.ee/api/v1/estonian-transport/tlt/vehicles',
-   {cache:'no-store'}
+   'https://proxy.cors.dev/https://nordapi.ee/api/v1/estonian-transport/tlt/vehicles',
+   {
+    cache:'no-store',
+    credentials:'omit'
+   }
   );
 
   if(!response.ok){
-   throw new Error('Сервер ответил: '+response.status);
+   const code=response.headers.get('X-Cors-Error');
+   throw new Error('Сервер ответил: '+response.status+(code?' ('+code+')':''));
   }
 
   const data=await response.json();
@@ -159,7 +159,6 @@ async function updateBuses(){
   );
 
   const active=new Set();
-
   buses.forEach(bus=>{
    const id=String(bus.vehicle_id);
    const route=String(bus.line);
