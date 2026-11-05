@@ -1,0 +1,309 @@
+
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tallinn Bus Tracker</title>
+
+<link rel="stylesheet"
+href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+
+<style>
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font-family: Arial, sans-serif;
+  background: #eef2f5;
+  color: #17212b;
+}
+
+header {
+  background: #173c59;
+  color: white;
+  padding: 18px;
+}
+
+header h1 {
+  font-size: 25px;
+  margin: 0 0 6px;
+}
+
+header p {
+  margin: 0;
+  font-size: 15px;
+}
+
+main {
+  padding: 14px;
+  max-width: 850px;
+  margin: auto;
+}
+
+.panel {
+  background: white;
+  padding: 16px;
+  border-radius: 12px;
+  margin-bottom: 14px;
+}
+
+h2 {
+  font-size: 21px;
+  margin: 0 0 14px;
+}
+
+select, button, input {
+  width: 100%;
+  min-height: 52px;
+  font-size: 19px;
+  border-radius: 9px;
+  padding: 10px;
+}
+
+select, input {
+  border: 2px solid #9aa9b5;
+  background: white;
+}
+
+button {
+  border: 0;
+  background: #17669b;
+  color: white;
+  font-weight: bold;
+  margin-top: 10px;
+}
+
+button:active { opacity: .8; }
+
+#routes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 9px;
+  margin-top: 12px;
+}
+
+.route {
+  background: #e5edf4;
+  border: 2px solid #51758e;
+  padding: 10px 14px;
+  border-radius: 9px;
+  font-size: 19px;
+  font-weight: bold;
+}
+
+.route button {
+  width: auto;
+  min-height: auto;
+  margin: 0 0 0 8px;
+  padding: 4px 9px;
+  background: #9d3030;
+}
+
+#map {
+  width: 100%;
+  height: 390px;
+  border-radius: 10px;
+  z-index: 1;
+}
+
+.legend {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.legend-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 16px;
+  font-weight: bold;
+}
+
+.dot {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.green { background: #168447; }
+.red { background: #d93636; }
+.blue { background: #287bd1; }
+.gray { background: #888888; }
+
+.notice {
+  font-size: 16px;
+  line-height: 1.5;
+  color: #435363;
+}
+
+footer {
+  text-align: center;
+  padding: 15px;
+  color: #667;
+  font-size: 14px;
+}
+
+@media (max-width: 450px) {
+  #map { height: 350px; }
+  .legend { grid-template-columns: 1fr; }
+}
+</style>
+</head>
+
+<body>
+
+<header>
+  <h1>🚌 Tallinn Bus Tracker</h1>
+  <p>Контроль движения автобусов Таллинна</p>
+</header>
+
+<main>
+
+<section class="panel">
+  <h2>Выбор маршрутов</h2>
+
+  <input id="routeInput"
+  type="number"
+  min="1"
+  placeholder="Введите номер маршрута">
+
+  <button onclick="addRoute()">
+    Добавить маршрут
+  </button>
+
+  <div id="routes"></div>
+
+  <p class="notice">
+    Можно выбрать одновременно не более трёх маршрутов.
+  </p>
+</section>
+
+<section class="panel">
+  <h2>Карта Таллинна</h2>
+  <div id="map"></div>
+  <p class="notice">
+    Карта готова. Подключение реальных автобусов GPS
+    будет выполнено на следующем этапе.
+  </p>
+</section>
+
+<section class="panel">
+  <h2>Контроль расписания</h2>
+
+  <div class="legend">
+
+    <div class="legend-item">
+      <span class="dot green"></span>
+      Зелёный: ±1 минута
+    </div>
+
+    <div class="legend-item">
+      <span class="dot red"></span>
+      Красный: раньше графика
+    </div>
+
+    <div class="legend-item">
+      <span class="dot blue"></span>
+      Синий: опоздание от 1 минуты
+    </div>
+
+    <div class="legend-item">
+      <span class="dot gray"></span>
+      Серый: нет информации
+    </div>
+
+  </div>
+</section>
+
+<section class="panel">
+  <h2>Передача смены</h2>
+  <p class="notice">
+    Здесь появится поиск автобуса по маршруту
+    и бортовому номеру, выбор места встречи
+    и расчёт времени прибытия.
+  </p>
+</section>
+
+<section class="panel">
+  <h2>Пересадки</h2>
+  <p class="notice">
+    Здесь появится расчёт пересадок между
+    выбранными маршрутами с учётом задержек
+    и времени перехода между остановками.
+  </p>
+</section>
+
+</main>
+
+<footer>
+  Tallinn Bus Tracker · Личная версия
+</footer>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+<script>
+const map = L.map('map').setView([59.437, 24.7536], 12);
+
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  attribution: '&copy; OpenStreetMap'
+}).addTo(map);
+
+let selectedRoutes = [];
+
+function addRoute() {
+  const input = document.getElementById('routeInput');
+  const value = input.value.trim();
+
+  if (!value || Number(value) < 1) {
+    alert('Введите номер маршрута');
+    return;
+  }
+
+  if (selectedRoutes.includes(value)) {
+    alert('Этот маршрут уже выбран');
+    return;
+  }
+
+  if (selectedRoutes.length >= 3) {
+    alert('Можно выбрать максимум три маршрута');
+    return;
+  }
+
+  selectedRoutes.push(value);
+  input.value = '';
+  renderRoutes();
+}
+
+function removeRoute(route) {
+  selectedRoutes = selectedRoutes.filter(r => r !== route);
+  renderRoutes();
+}
+
+function renderRoutes() {
+  const container = document.getElementById('routes');
+  container.innerHTML = '';
+
+  selectedRoutes.forEach(route => {
+    const item = document.createElement('div');
+    item.className = 'route';
+
+    const label = document.createElement('span');
+    label.textContent = 'Автобус № ' + route;
+
+    const button = document.createElement('button');
+    button.textContent = '×';
+    button.setAttribute('aria-label', 'Удалить маршрут ' + route);
+    button.onclick = () => removeRoute(route);
+
+    item.appendChild(label);
+    item.appendChild(button);
+    container.appendChild(item);
+  });
+}
+</script>
+
+</body>
+</html>
