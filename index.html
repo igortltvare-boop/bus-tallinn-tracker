@@ -70,7 +70,7 @@ button{background:#17669b;color:white;border:0;font-weight:bold}
 <div class="item"><span class="dot blue"></span>Опаздывает</div>
 <div class="item"><span class="dot gray"></span>Нет данных</div>
 </div>
-<p>Отклонение рассчитывается на остановке при подтверждении GPS.</p>
+<p>Отклонение оценивается рядом с остановками выбранного маршрута.</p>
 <p>Цветные линии обозначают маршруты автобусов.</p>
 <p>Кружки на карте обозначают остановки выбранных маршрутов.</p>
 </section>
@@ -103,15 +103,11 @@ let busy=false;
 
 let routeFiles={};
 let stops=[];
+let stopsById={};
 let calendarData={calendar:[],exceptions:[]};
 let timetableReady=false;
 
-const ROUTE_COLORS=[
- '#00a6a6',
- '#e87522',
- '#8b55b5'
-];
-
+const ROUTE_COLORS=['#00a6a6','#e87522','#8b55b5'];
 const routeShapeLayer=L.layerGroup().addTo(map);
 const routeStopLayer=L.layerGroup().addTo(map);
 
@@ -210,6 +206,11 @@ async function loadTimetableData(){
   stops=await responses[1].json();
   calendarData=await responses[2].json();
 
+  stopsById={};
+  stops.forEach(stop=>{
+   stopsById[String(stop.stop_id)]=stop;
+  });
+
   window.routeManifest=manifest.routes||[];
 
   await loadSelectedRouteFiles();
@@ -274,7 +275,6 @@ async function loadSelectedRouteFiles(){
 
 function renderRouteShapes(){
  routeShapeLayer.clearLayers();
-
  let lineCount=0;
 
  Object.entries(routeFiles).forEach(([route,files])=>{
@@ -328,7 +328,6 @@ function renderRouteShapes(){
 
 function renderRouteStops(){
  routeStopLayer.clearLayers();
-
  const usedStopIds=new Set();
 
  Object.values(routeFiles).forEach(files=>{
@@ -351,7 +350,6 @@ function renderRouteStops(){
 
   if(!Number.isFinite(lat)||!Number.isFinite(lon))return;
 
-  const name=stop.stop_name||'Остановка';
   const marker=L.circleMarker([lat,lon],{
    radius:6,
    color:'#173c59',
@@ -361,7 +359,7 @@ function renderRouteStops(){
   });
 
   marker.bindPopup(
-   '<b>'+escapeHtml(name)+'</b><br>'+
+   '<b>'+escapeHtml(stop.stop_name||'Остановка')+'</b><br>'+
    'Маршрут: '+selectedRoutes.join(', ')
   );
 
@@ -446,14 +444,28 @@ function distanceMeters(a,b){
  return 2*R*Math.atan2(Math.sqrt(x),Math.sqrt(1-x));
 }
 
-function findNearestStop(pos){
+/* Ищем ближайшую остановку только среди остановок нужного маршрута */
+function findNearestStop(pos,route){
+ const files=routeFiles[route]||[];
+ const routeStopIds=new Set();
+
+ files.forEach(file=>{
+  (file.trips||[]).forEach(trip=>{
+   (trip.stops||[]).forEach(item=>{
+    routeStopIds.add(String(item.stop_id));
+   });
+  });
+ });
+
  let best=null;
  let bestDistance=Infinity;
 
- stops.forEach(stop=>{
+ routeStopIds.forEach(id=>{
+  const stop=stopsById[id];
+  if(!stop)return;
+
   const lat=Number(stop.stop_lat);
   const lon=Number(stop.stop_lon);
-
   if(!Number.isFinite(lat)||!Number.isFinite(lon))return;
 
   const d=distanceMeters(pos,[lat,lon]);
@@ -480,16 +492,17 @@ function timeToSeconds(value){
  return p[0]*3600+p[1]*60+p[2];
 }
 
+function normalizeDestination(value){
+ return String(value||'')
+  .toLowerCase()
+  .replace(/[^a-zа-яё0-9]/gi,'');
+}
+
+/* Сравнение расписания у ближайшей остановки маршрута */
 function getScheduleStatus(bus,route,pos){
  if(!timetableReady)return null;
 
- const atStop=bus.at_stop===true||
-  String(bus.at_stop).toLowerCase()==='true'||
-  String(bus.at_stop)==='1';
-
- if(!atStop)return null;
-
- const nearest=findNearestStop(pos);
+ const nearest=findNearestStop(pos,route);
  if(!nearest)return null;
 
  const files=routeFiles[route]||[];
@@ -501,6 +514,10 @@ function getScheduleStatus(bus,route,pos){
 
  const activeToday=activeServices(today);
  const activeYesterday=activeServices(yesterday);
+
+ const destination=normalizeDestination(
+  bus.destination||bus.destination_name||''
+ );
 
  let best=null;
 
@@ -520,6 +537,11 @@ function getScheduleStatus(bus,route,pos){
 
    if(!active)return;
 
+   /* По возможности выбираем рейс с нужной конечной остановкой */
+   const headsign=normalizeDestination(trip.headsign||'');
+   const directionMatch=destination&&headsign&&
+    (headsign.includes(destination)||destination.includes(headsign));
+
    const stopTime=(trip.stops||[]).find(s=>
     String(s.stop_id)===String(nearest.stop.stop_id)
    );
@@ -538,16 +560,22 @@ function getScheduleStatus(bus,route,pos){
    const difference=now-adjusted;
    const absolute=Math.abs(difference);
 
+   /* Слишком далёкое время не считаем подходящим рейсом */
    if(absolute>1800)return;
 
-   if(!best||absolute<best.absolute){
-    best={
-     difference,
-     absolute,
-     trip,
-     scheduled:adjusted,
-     stop:nearest.stop
-    };
+   const candidate={
+    difference,
+    absolute,
+    trip,
+    scheduled:adjusted,
+    directionMatch:Boolean(directionMatch)
+   };
+
+   if(!best||
+      (candidate.directionMatch&&!best.directionMatch)||
+      (candidate.directionMatch===best.directionMatch&&
+       candidate.absolute<best.absolute)){
+    best=candidate;
    }
   });
  });
@@ -566,8 +594,10 @@ function getScheduleStatus(bus,route,pos){
  }
 
  return {
-  color,label,
+  color,
+  label,
   stop:nearest.stop.stop_name||'Остановка',
+  distance:Math.round(nearest.distance),
   headsign:best.trip.headsign||'',
   difference:best.difference
  };
@@ -630,22 +660,22 @@ async function updateBuses(){
 
    const destination=bus.destination||'Не указано';
 
-   let scheduleText='Расписание: нет надёжных данных';
+   let scheduleText='Расписание: нет данных рядом с остановкой маршрута';
 
    if(schedule){
     scheduleText='Расписание: '+schedule.label+'<br>'+
-     'Остановка: '+schedule.stop+
-     (schedule.headsign?'<br>Рейс: '+schedule.headsign:'');
+     'Ближайшая остановка: '+escapeHtml(schedule.stop)+
+     ' ('+schedule.distance+' м)'+
+     (schedule.headsign?
+      '<br>Конечная рейса: '+escapeHtml(schedule.headsign):'');
    }else if(!timetableReady){
     scheduleText='Расписание ещё загружается';
-   }else if(!bus.at_stop){
-    scheduleText='Расписание: ожидание остановки';
    }
 
    const popup=
     '<b>Автобус № '+route+'</b><br>'+
-    'Бортовой номер: '+id+'<br>'+
-    'Конечная остановка: '+destination+'<br>'+
+    'Бортовой номер: '+escapeHtml(id)+'<br>'+
+    'Конечная остановка: '+escapeHtml(destination)+'<br>'+
     'Направление: '+heading+'°<br>'+
     'GPS: активен<br>'+scheduleText;
 
