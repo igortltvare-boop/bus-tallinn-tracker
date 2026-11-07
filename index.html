@@ -37,6 +37,12 @@ button{background:#17669b;color:white;border:0;font-weight:bold}
 }
 .bus-icon .arrow{font-size:20px;line-height:20px}
 .bus-icon .number{font-size:14px;line-height:15px}
+.stop-dot{
+ background:#fff;
+ border:2px solid #173c59;
+ border-radius:50%;
+ box-shadow:0 1px 4px #555;
+}
 </style>
 </head>
 <body>
@@ -58,6 +64,7 @@ button{background:#17669b;color:white;border:0;font-weight:bold}
 <div id="map"></div>
 <p id="gpsStatus" class="status">Подключение к GPS...</p>
 <p id="timetableStatus" class="status">Загрузка расписания...</p>
+<p id="stopStatus" class="status">Загрузка остановок...</p>
 </section>
 
 <section class="panel">
@@ -69,6 +76,7 @@ button{background:#17669b;color:white;border:0;font-weight:bold}
 <div class="item"><span class="dot gray"></span>Нет данных</div>
 </div>
 <p>Отклонение рассчитывается на остановке при подтверждении GPS.</p>
+<p>Кружки на карте обозначают остановки выбранных маршрутов.</p>
 </section>
 
 <section class="panel">
@@ -101,6 +109,8 @@ let routeFiles={};
 let stops=[];
 let calendarData={calendar:[],exceptions:[]};
 let timetableReady=false;
+
+const routeStopLayer=L.layerGroup().addTo(map);
 
 const COLORS={
  green:'#168447',
@@ -198,7 +208,7 @@ async function loadTimetableData(){
   await loadSelectedRouteFiles();
 
   timetableReady=true;
-  status.textContent='Расписания загружены. Остановок: '+stops.length;
+  status.textContent='Расписания загружены. Остановок в базе: '+stops.length;
 
  }catch(error){
   timetableReady=false;
@@ -213,9 +223,11 @@ async function loadSelectedRouteFiles(){
  );
 
  routeFiles={};
+ routeStopLayer.clearLayers();
 
  if(!entries.length){
   status.textContent='Для выбранных маршрутов файлы не найдены.';
+  document.getElementById('stopStatus').textContent='Остановки не найдены.';
   return;
  }
 
@@ -238,10 +250,71 @@ async function loadSelectedRouteFiles(){
   status.textContent='Расписания загружены: '+entries.length+
    ' файлов для маршрутов '+selectedRoutes.join(', ');
 
+  renderRouteStops();
+
  }catch(error){
   status.textContent='Ошибка файла расписания: '+error.message;
   routeFiles={};
+  routeStopLayer.clearLayers();
+  document.getElementById('stopStatus').textContent='Не удалось отобразить остановки.';
  }
+}
+
+function renderRouteStops(){
+ routeStopLayer.clearLayers();
+
+ const usedStopIds=new Set();
+
+ Object.values(routeFiles).forEach(files=>{
+  files.forEach(file=>{
+   (file.trips||[]).forEach(trip=>{
+    (trip.stops||[]).forEach(item=>{
+     usedStopIds.add(String(item.stop_id));
+    });
+   });
+  });
+ });
+
+ let shown=0;
+
+ stops.forEach(stop=>{
+  if(!usedStopIds.has(String(stop.stop_id)))return;
+
+  const lat=Number(stop.stop_lat);
+  const lon=Number(stop.stop_lon);
+
+  if(!Number.isFinite(lat)||!Number.isFinite(lon))return;
+
+  const name=stop.stop_name||'Остановка';
+  const marker=L.circleMarker([lat,lon],{
+   radius:6,
+   color:'#173c59',
+   weight:2,
+   fillColor:'#ffffff',
+   fillOpacity:1
+  });
+
+  marker.bindPopup(
+   '<b>'+escapeHtml(name)+'</b><br>'+
+   'Маршрут: '+selectedRoutes.join(', ')
+  );
+
+  marker.addTo(routeStopLayer);
+  shown++;
+ });
+
+ document.getElementById('stopStatus').textContent=
+  'Остановок маршрутов на карте: '+shown;
+}
+
+function escapeHtml(value){
+ return String(value).replace(/[&<>"']/g,char=>({
+  '&':'&amp;',
+  '<':'&lt;',
+  '>':'&gt;',
+  '"':'&quot;',
+  "'":'&#39;'
+ }[char]));
 }
 
 function addRoute(){
