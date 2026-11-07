@@ -25,11 +25,12 @@ button{background:#17669b;color:white;border:0;font-weight:bold}
 .item{font-size:16px;font-weight:bold;display:flex;align-items:center;gap:9px}
 .dot{width:20px;height:20px;border-radius:50%}
 .green{background:#168447}
+.red{background:#d52b2b}
+.blue{background:#1769c2}
 .gray{background:#888}
 .bus-icon{
  width:48px;height:48px;border-radius:50%;
- background:#168447;border:3px solid white;
- box-shadow:0 2px 7px #555;
+ border:3px solid white;box-shadow:0 2px 7px #555;
  display:flex;flex-direction:column;
  align-items:center;justify-content:center;
  color:white;font-weight:bold;
@@ -43,6 +44,7 @@ button{background:#17669b;color:white;border:0;font-weight:bold}
 <h1>🚌 Tallinn Bus Tracker</h1>
 Контроль движения автобусов Таллинна
 </header>
+
 <main>
 <section class="panel">
 <h2>Выбор маршрутов (до 3)</h2>
@@ -55,15 +57,18 @@ button{background:#17669b;color:white;border:0;font-weight:bold}
 <h2>Карта Таллинна</h2>
 <div id="map"></div>
 <p id="gpsStatus" class="status">Подключение к GPS...</p>
+<p id="timetableStatus" class="status">Загрузка расписания...</p>
 </section>
 
 <section class="panel">
 <h2>Обозначения</h2>
 <div class="legend">
-<div class="item"><span class="dot green"></span>GPS получен</div>
-<div class="item"><span class="dot gray"></span>Нет GPS</div>
+<div class="item"><span class="dot green"></span>По графику</div>
+<div class="item"><span class="dot red"></span>Опережает</div>
+<div class="item"><span class="dot blue"></span>Опаздывает</div>
+<div class="item"><span class="dot gray"></span>Нет данных</div>
 </div>
-<p>Стрелка показывает направление движения. Цвет пока не показывает опоздание или опережение.</p>
+<p>Отклонение рассчитывается на остановке при подтверждении GPS.</p>
 </section>
 
 <section class="panel">
@@ -75,7 +80,7 @@ button{background:#17669b;color:white;border:0;font-weight:bold}
 
 <section class="panel">
 <h2>Пересадки</h2>
-<p>Этот раздел подключим после добавления расписаний и остановок.</p>
+<p>Этот раздел подключим после проверки расписаний.</p>
 </section>
 </main>
 
@@ -92,54 +97,350 @@ let markers={};
 let trackedBus='';
 let busy=false;
 
+let routeFiles={};
+let stops=[];
+let calendarData={calendar:[],exceptions:[]};
+let timetableReady=false;
+
+const COLORS={
+ green:'#168447',
+ red:'#d52b2b',
+ blue:'#1769c2',
+ gray:'#888888'
+};
+
+function localDate(offset=0){
+ const parts=new Intl.DateTimeFormat('en-CA',{
+  timeZone:'Europe/Tallinn',
+  year:'numeric',month:'2-digit',day:'2-digit'
+ }).formatToParts(new Date());
+
+ const p={};
+ parts.forEach(x=>p[x.type]=x.value);
+
+ const d=new Date(Date.UTC(
+  Number(p.year),Number(p.month)-1,Number(p.day)+offset
+ ));
+
+ return d.getUTCFullYear()+
+  String(d.getUTCMonth()+1).padStart(2,'0')+
+  String(d.getUTCDate()).padStart(2,'0');
+}
+
+function localSeconds(){
+ const parts=new Intl.DateTimeFormat('en-GB',{
+  timeZone:'Europe/Tallinn',
+  hour:'2-digit',minute:'2-digit',second:'2-digit',
+  hourCycle:'h23'
+ }).formatToParts(new Date());
+
+ const p={};
+ parts.forEach(x=>p[x.type]=Number(x.value));
+
+ return p.hour*3600+p.minute*60+p.second;
+}
+
+function activeServices(date){
+ const result=new Set();
+ const d=new Date(
+  Date.UTC(
+   Number(date.slice(0,4)),
+   Number(date.slice(4,6))-1,
+   Number(date.slice(6,8))
+  )
+ );
+ const dayNames=[
+  'sunday','monday','tuesday','wednesday',
+  'thursday','friday','saturday'
+ ];
+ const day=dayNames[d.getUTCDay()];
+
+ (calendarData.calendar||[]).forEach(row=>{
+  if(date>=row.start_date&&date<=row.end_date&&
+     String(row[day])==='1'){
+   result.add(String(row.service_id));
+  }
+ });
+
+ (calendarData.exceptions||[]).forEach(row=>{
+  if(row.date===date){
+   if(String(row.exception_type)==='1'){
+    result.add(String(row.service_id));
+   }else if(String(row.exception_type)==='2'){
+    result.delete(String(row.service_id));
+   }
+  }
+ });
+
+ return result;
+}
+
+async function loadTimetableData(){
+ const status=document.getElementById('timetableStatus');
+
+ try{
+  const responses=await Promise.all([
+   fetch('data/routes/index.json',{cache:'no-store'}),
+   fetch('data/stops.json',{cache:'no-store'}),
+   fetch('data/calendar.json',{cache:'no-store'})
+  ]);
+
+  if(responses.some(r=>!r.ok)){
+   throw new Error('Не удалось загрузить основные файлы');
+  }
+
+  const manifest=await responses[0].json();
+  stops=await responses[1].json();
+  calendarData=await responses[2].json();
+
+  window.routeManifest=manifest.routes||[];
+
+  await loadSelectedRouteFiles();
+
+  timetableReady=true;
+  status.textContent='Расписания загружены. Остановок: '+stops.length;
+
+ }catch(error){
+  timetableReady=false;
+  status.textContent='Ошибка загрузки расписания: '+error.message;
+ }
+}
+
+async function loadSelectedRouteFiles(){
+ const status=document.getElementById('timetableStatus');
+ const entries=(window.routeManifest||[]).filter(x=>
+  selectedRoutes.includes(String(x.route_number))
+ );
+
+ routeFiles={};
+
+ if(!entries.length){
+  status.textContent='Для выбранных маршрутов файлы не найдены.';
+  return;
+ }
+
+ try{
+  await Promise.all(entries.map(async entry=>{
+   const response=await fetch(
+    'data/routes/'+encodeURIComponent(entry.file),
+    {cache:'no-store'}
+   );
+
+   if(!response.ok)throw new Error(entry.file);
+
+   const data=await response.json();
+   const number=String(entry.route_number);
+
+   if(!routeFiles[number])routeFiles[number]=[];
+   routeFiles[number].push(data);
+  }));
+
+  status.textContent='Расписания загружены: '+entries.length+
+   ' файлов для маршрутов '+selectedRoutes.join(', ');
+
+ }catch(error){
+  status.textContent='Ошибка файла расписания: '+error.message;
+  routeFiles={};
+ }
+}
+
 function addRoute(){
  const input=document.getElementById('routeInput');
  const v=input.value.trim();
+
  if(!v){alert('Введите номер маршрута');return}
  if(selectedRoutes.includes(v)){alert('Маршрут уже выбран');return}
  if(selectedRoutes.length>=3){alert('Максимум три маршрута');return}
+
  selectedRoutes.push(v);
  input.value='';
  renderRoutes();
- updateBuses();
+ loadSelectedRouteFiles().then(updateBuses);
 }
 
 function removeRoute(v){
  selectedRoutes=selectedRoutes.filter(x=>x!==v);
  renderRoutes();
- updateBuses();
+ loadSelectedRouteFiles().then(updateBuses);
 }
 
 function renderRoutes(){
  const box=document.getElementById('routes');
  box.innerHTML='';
+
  selectedRoutes.forEach(v=>{
   const el=document.createElement('div');
   el.className='route';
+
   const label=document.createElement('span');
   label.textContent='Маршрут № '+v;
+
   const btn=document.createElement('button');
   btn.textContent='×';
   btn.onclick=()=>removeRoute(v);
+
   el.append(label,btn);
   box.append(el);
  });
 }
 
 function position(bus){
- const lat=Number(bus.lat);
- const lon=Number(bus.lon);
+ const lat=Number(bus.lat??bus.latitude);
+ const lon=Number(bus.lon??bus.longitude);
+
  if(!Number.isFinite(lat)||!Number.isFinite(lon))return null;
  if(lat<58||lat>60||lon<21||lon>29)return null;
+
  return [lat,lon];
 }
 
-function makeIcon(route,heading){
+function distanceMeters(a,b){
+ const R=6371000;
+ const rad=x=>x*Math.PI/180;
+ const dLat=rad(b[0]-a[0]);
+ const dLon=rad(b[1]-a[1]);
+
+ const x=Math.sin(dLat/2)**2+
+  Math.cos(rad(a[0]))*Math.cos(rad(b[0]))*
+  Math.sin(dLon/2)**2;
+
+ return 2*R*Math.atan2(Math.sqrt(x),Math.sqrt(1-x));
+}
+
+function findNearestStop(pos){
+ let best=null;
+ let bestDistance=Infinity;
+
+ stops.forEach(stop=>{
+  const lat=Number(stop.stop_lat);
+  const lon=Number(stop.stop_lon);
+
+  if(!Number.isFinite(lat)||!Number.isFinite(lon))return;
+
+  const d=distanceMeters(pos,[lat,lon]);
+
+  if(d<bestDistance){
+   bestDistance=d;
+   best=stop;
+  }
+ });
+
+ if(best&&bestDistance<=180){
+  return {stop:best,distance:bestDistance};
+ }
+
+ return null;
+}
+
+function timeToSeconds(value){
+ if(!value)return null;
+
+ const p=value.split(':').map(Number);
+ if(p.length!==3||p.some(x=>!Number.isFinite(x)))return null;
+
+ return p[0]*3600+p[1]*60+p[2];
+}
+
+function getScheduleStatus(bus,route,pos){
+ if(!timetableReady)return null;
+
+ const atStop=bus.at_stop===true||
+  String(bus.at_stop).toLowerCase()==='true'||
+  String(bus.at_stop)==='1';
+
+ if(!atStop)return null;
+
+ const nearest=findNearestStop(pos);
+ if(!nearest)return null;
+
+ const files=routeFiles[route]||[];
+ if(!files.length)return null;
+
+ const today=localDate(0);
+ const yesterday=localDate(-1);
+ const now=localSeconds();
+
+ const activeToday=activeServices(today);
+ const activeYesterday=activeServices(yesterday);
+
+ let best=null;
+
+ files.forEach(file=>{
+  (file.trips||[]).forEach(trip=>{
+   const service=String(trip.service_id);
+
+   let offset=0;
+   let active=false;
+
+   if(activeToday.has(service)){
+    active=true;
+   }else if(activeYesterday.has(service)){
+    offset=-86400;
+    active=true;
+   }
+
+   if(!active)return;
+
+   const stopTime=(trip.stops||[]).find(s=>
+    String(s.stop_id)===String(nearest.stop.stop_id)
+   );
+
+   if(!stopTime)return;
+
+   const scheduled=timeToSeconds(
+    stopTime.departure||stopTime.arrival
+   );
+
+   if(scheduled===null)return;
+
+   if(offset===-86400&&scheduled<86400)return;
+
+   const adjusted=scheduled+offset;
+   const difference=now-adjusted;
+   const absolute=Math.abs(difference);
+
+   if(absolute>1800)return;
+
+   if(!best||absolute<best.absolute){
+    best={
+     difference,
+     absolute,
+     trip,
+     scheduled:adjusted,
+     stop:nearest.stop
+    };
+   }
+  });
+ });
+
+ if(!best)return null;
+
+ let color='green';
+ let label='По графику';
+
+ if(best.difference < -60){
+  color='red';
+  label='Опережает на '+Math.round(-best.difference/60)+' мин.';
+ }else if(best.difference > 60){
+  color='blue';
+  label='Опаздывает на '+Math.round(best.difference/60)+' мин.';
+ }
+
+ return {
+  color,label,
+  stop:nearest.stop.stop_name||'Остановка',
+  headsign:best.trip.headsign||'',
+  difference:best.difference
+ };
+}
+
+function makeIcon(route,heading,color){
  const angle=Number(heading)||0;
+
  return L.divIcon({
   className:'',
   html:
-   '<div class="bus-icon">'+
+   '<div class="bus-icon" style="background:'+color+'">'+
    '<span class="arrow" style="transform:rotate('+angle+'deg)">↑</span>'+
    '<span class="number">'+route+'</span>'+
    '</div>',
@@ -151,6 +452,7 @@ function makeIcon(route,heading){
 async function updateBuses(){
  if(busy)return;
  busy=true;
+
  const status=document.getElementById('gpsStatus');
 
  try{
@@ -169,8 +471,8 @@ async function updateBuses(){
   }
 
   const buses=vehicles.filter(bus=>
-   String(bus.type)==='2' &&
-   selectedRoutes.includes(String(bus.line)) &&
+   String(bus.type)==='2'&&
+   selectedRoutes.includes(String(bus.line))&&
    position(bus)!==null
   );
 
@@ -180,18 +482,35 @@ async function updateBuses(){
    const id=String(bus.vehicle_id);
    const route=String(bus.line);
    const pos=position(bus);
-   const heading=Number(bus.heading)||0;
+   const heading=Number(bus.heading??bus.direction)||0;
+
    active.add(id);
 
+   const schedule=getScheduleStatus(bus,route,pos);
+   const color=schedule?COLORS[schedule.color]:COLORS.gray;
+
    const destination=bus.destination||'Не указано';
+
+   let scheduleText='Расписание: нет надёжных данных';
+
+   if(schedule){
+    scheduleText='Расписание: '+schedule.label+'<br>'+
+     'Остановка: '+schedule.stop+
+     (schedule.headsign?'<br>Рейс: '+schedule.headsign:'');
+   }else if(!timetableReady){
+    scheduleText='Расписание ещё загружается';
+   }else if(!bus.at_stop){
+    scheduleText='Расписание: ожидание остановки';
+   }
+
    const popup=
     '<b>Автобус № '+route+'</b><br>'+
     'Бортовой номер: '+id+'<br>'+
     'Конечная остановка: '+destination+'<br>'+
     'Направление: '+heading+'°<br>'+
-    'GPS: активен';
+    'GPS: активен<br>'+scheduleText;
 
-   const icon=makeIcon(route,heading);
+   const icon=makeIcon(route,heading,color);
 
    if(markers[id]){
     markers[id].setLatLng(pos);
@@ -247,7 +566,10 @@ function trackBus(){
 }
 
 renderRoutes();
+
+loadTimetableData().then(updateBuses);
 updateBuses();
+
 setInterval(updateBuses,10000);
 </script>
 </body>
