@@ -1,3 +1,4 @@
+
 name: Update Tallinn bus timetables
 
 on:
@@ -21,7 +22,7 @@ jobs:
           mkdir -p data
           curl -fL "https://eu-gtfs.remix.com/tallinn.zip" -o /tmp/tallinn.zip
 
-      - name: Build route timetables
+      - name: Build route timetables and shapes
         run: |
           python - <<'PY'
           import csv
@@ -47,10 +48,10 @@ jobs:
 
               calendar = read_csv("calendar.txt") if "calendar.txt" in names else []
               exceptions = read_csv("calendar_dates.txt") if "calendar_dates.txt" in names else []
+              shape_rows = read_csv("shapes.txt") if "shapes.txt" in names else []
 
           os.makedirs("data/routes", exist_ok=True)
 
-          trips_by_id = {t["trip_id"]: t for t in trips}
           times_by_trip = {}
 
           for row in stop_times:
@@ -63,6 +64,25 @@ jobs:
 
           for trip_id in times_by_trip:
               times_by_trip[trip_id].sort(key=lambda x: x["sequence"])
+
+          shapes_by_id = {}
+
+          for row in shape_rows:
+              shape_id = row.get("shape_id", "")
+              if not shape_id:
+                  continue
+
+              shapes_by_id.setdefault(shape_id, []).append({
+                  "lat": float(row["shape_pt_lat"]),
+                  "lon": float(row["shape_pt_lon"]),
+                  "sequence": int(row["shape_pt_sequence"])
+              })
+
+          for shape_id in shapes_by_id:
+              shapes_by_id[shape_id].sort(key=lambda x: x["sequence"])
+              shapes_by_id[shape_id] = [
+                  [p["lat"], p["lon"]] for p in shapes_by_id[shape_id]
+              ]
 
           trips_by_route = {}
 
@@ -89,10 +109,21 @@ jobs:
 
               filename = re.sub(r"[^a-zA-Z0-9_-]", "_", route_id) + ".json"
 
+              route_shape_ids = sorted({
+                  t["shape_id"] for t in route_trips
+                  if t["shape_id"] in shapes_by_id
+              })
+
+              route_shapes = {
+                  shape_id: shapes_by_id[shape_id]
+                  for shape_id in route_shape_ids
+              }
+
               data = {
                   "route": route,
                   "updated": datetime.now(timezone.utc).isoformat(),
-                  "trips": route_trips
+                  "trips": route_trips,
+                  "shapes": route_shapes
               }
 
               with open("data/routes/" + filename, "w", encoding="utf-8") as f:
@@ -103,7 +134,8 @@ jobs:
                   "route_number": route.get("route_short_name", ""),
                   "route_name": route.get("route_long_name", ""),
                   "file": filename,
-                  "trip_count": len(route_trips)
+                  "trip_count": len(route_trips),
+                  "shape_count": len(route_shapes)
               })
 
           with open("data/routes/index.json", "w", encoding="utf-8") as f:
@@ -127,6 +159,8 @@ jobs:
           print("Routes created:", len(manifest))
           print("Trips created:", sum(r["trip_count"] for r in manifest))
           print("Stops:", len(stops))
+          print("Routes with geometry:", sum(r["shape_count"] > 0 for r in manifest))
+          print("Geometry lines:", sum(r["shape_count"] for r in manifest))
           PY
 
       - name: Save updated data
@@ -134,5 +168,5 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A data
-          git commit -m "Build Tallinn route timetables" || echo "No changes"
+          git commit -m "Build Tallinn route timetables and shapes" || echo "No changes"
           git push
