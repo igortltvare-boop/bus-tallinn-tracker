@@ -37,12 +37,6 @@ button{background:#17669b;color:white;border:0;font-weight:bold}
 }
 .bus-icon .arrow{font-size:20px;line-height:20px}
 .bus-icon .number{font-size:14px;line-height:15px}
-.stop-dot{
- background:#fff;
- border:2px solid #173c59;
- border-radius:50%;
- box-shadow:0 1px 4px #555;
-}
 </style>
 </head>
 <body>
@@ -64,6 +58,7 @@ button{background:#17669b;color:white;border:0;font-weight:bold}
 <div id="map"></div>
 <p id="gpsStatus" class="status">Подключение к GPS...</p>
 <p id="timetableStatus" class="status">Загрузка расписания...</p>
+<p id="routeLineStatus" class="status">Загрузка линий маршрутов...</p>
 <p id="stopStatus" class="status">Загрузка остановок...</p>
 </section>
 
@@ -76,6 +71,7 @@ button{background:#17669b;color:white;border:0;font-weight:bold}
 <div class="item"><span class="dot gray"></span>Нет данных</div>
 </div>
 <p>Отклонение рассчитывается на остановке при подтверждении GPS.</p>
+<p>Цветные линии обозначают маршруты автобусов.</p>
 <p>Кружки на карте обозначают остановки выбранных маршрутов.</p>
 </section>
 
@@ -110,6 +106,13 @@ let stops=[];
 let calendarData={calendar:[],exceptions:[]};
 let timetableReady=false;
 
+const ROUTE_COLORS=[
+ '#00a6a6',
+ '#e87522',
+ '#8b55b5'
+];
+
+const routeShapeLayer=L.layerGroup().addTo(map);
 const routeStopLayer=L.layerGroup().addTo(map);
 
 const COLORS={
@@ -118,6 +121,11 @@ const COLORS={
  blue:'#1769c2',
  gray:'#888888'
 };
+
+function routeColor(route){
+ const index=selectedRoutes.indexOf(String(route));
+ return ROUTE_COLORS[index>=0?index%ROUTE_COLORS.length:0];
+}
 
 function localDate(offset=0){
  const parts=new Intl.DateTimeFormat('en-CA',{
@@ -152,13 +160,12 @@ function localSeconds(){
 
 function activeServices(date){
  const result=new Set();
- const d=new Date(
-  Date.UTC(
-   Number(date.slice(0,4)),
-   Number(date.slice(4,6))-1,
-   Number(date.slice(6,8))
-  )
- );
+ const d=new Date(Date.UTC(
+  Number(date.slice(0,4)),
+  Number(date.slice(4,6))-1,
+  Number(date.slice(6,8))
+ ));
+
  const dayNames=[
   'sunday','monday','tuesday','wednesday',
   'thursday','friday','saturday'
@@ -223,10 +230,12 @@ async function loadSelectedRouteFiles(){
  );
 
  routeFiles={};
+ routeShapeLayer.clearLayers();
  routeStopLayer.clearLayers();
 
  if(!entries.length){
   status.textContent='Для выбранных маршрутов файлы не найдены.';
+  document.getElementById('routeLineStatus').textContent='Линии маршрутов не найдены.';
   document.getElementById('stopStatus').textContent='Остановки не найдены.';
   return;
  }
@@ -250,14 +259,71 @@ async function loadSelectedRouteFiles(){
   status.textContent='Расписания загружены: '+entries.length+
    ' файлов для маршрутов '+selectedRoutes.join(', ');
 
+  renderRouteShapes();
   renderRouteStops();
 
  }catch(error){
   status.textContent='Ошибка файла расписания: '+error.message;
   routeFiles={};
+  routeShapeLayer.clearLayers();
   routeStopLayer.clearLayers();
+  document.getElementById('routeLineStatus').textContent='Не удалось загрузить линии.';
   document.getElementById('stopStatus').textContent='Не удалось отобразить остановки.';
  }
+}
+
+function renderRouteShapes(){
+ routeShapeLayer.clearLayers();
+
+ let lineCount=0;
+
+ Object.entries(routeFiles).forEach(([route,files])=>{
+  const color=routeColor(route);
+  const alreadyDrawn=new Set();
+
+  files.forEach(file=>{
+   const shapes=file.shapes||{};
+
+   Object.entries(shapes).forEach(([shapeId,coordinates])=>{
+    if(alreadyDrawn.has(shapeId))return;
+    alreadyDrawn.add(shapeId);
+
+    if(!Array.isArray(coordinates)||coordinates.length<2)return;
+
+    const points=coordinates.map(point=>[
+     Number(point[0]),Number(point[1])
+    ]).filter(point=>
+     Number.isFinite(point[0])&&
+     Number.isFinite(point[1])&&
+     point[0]>=58&&point[0]<=60&&
+     point[1]>=21&&point[1]<=29
+    );
+
+    if(points.length<2)return;
+
+    const line=L.polyline(points,{
+     color:color,
+     weight:7,
+     opacity:0.85,
+     lineCap:'round',
+     lineJoin:'round'
+    });
+
+    line.bindPopup(
+     '<b>Маршрут № '+escapeHtml(route)+'</b><br>'+
+     'Линия движения автобуса'
+    );
+
+    line.addTo(routeShapeLayer);
+    lineCount++;
+   });
+  });
+ });
+
+ document.getElementById('routeLineStatus').textContent=
+  lineCount?
+  'Линии маршрутов на карте: '+lineCount:
+  'Геометрия маршрутов пока не найдена в данных.';
 }
 
 function renderRouteStops(){
