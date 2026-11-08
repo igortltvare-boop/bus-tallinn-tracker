@@ -37,6 +37,14 @@ button{background:#17669b;color:white;border:0;font-weight:bold}
 }
 .bus-icon .arrow{font-size:20px;line-height:20px}
 .bus-icon .number{font-size:14px;line-height:15px}
+.eye-button{
+ display:block;width:100%;min-height:48px;
+ margin-top:12px;background:#17669b;
+ color:white;border:0;border-radius:9px;
+ font-size:18px;font-weight:bold;cursor:pointer;
+}
+.popup-info{font-size:15px;line-height:1.5;min-width:210px}
+#stopTrackingButton{background:#a33;display:none}
 </style>
 </head>
 <body>
@@ -57,6 +65,7 @@ button{background:#17669b;color:white;border:0;font-weight:bold}
 <h2>Карта Таллинна</h2>
 <div id="map"></div>
 <p id="gpsStatus" class="status">Подключение к GPS...</p>
+<p id="trackingStatus" class="status">Слежение не включено.</p>
 <p id="timetableStatus" class="status">Загрузка расписания...</p>
 <p id="routeLineStatus" class="status">Загрузка линий маршрутов...</p>
 <p id="stopStatus" class="status">Загрузка остановок...</p>
@@ -68,17 +77,18 @@ button{background:#17669b;color:white;border:0;font-weight:bold}
 <div class="item"><span class="dot green"></span>По графику</div>
 <div class="item"><span class="dot red"></span>Опережает</div>
 <div class="item"><span class="dot blue"></span>Опаздывает</div>
-<div class="item"><span class="dot gray"></span>Нет данных</div>
+<div class="item"><span class="dot gray"></span>Не выбран</div>
 </div>
-<p>Отклонение оценивается рядом с остановками выбранного маршрута.</p>
-<p>Цветные линии обозначают маршруты автобусов.</p>
-<p>Кружки на карте обозначают остановки выбранных маршрутов.</p>
+<p>Все автобусы отображаются серыми. Цвет получает только автобус, за которым включено слежение.</p>
+<p>Зелёный — по графику, красный — опережает, синий — опаздывает.</p>
+<p>Цветные линии обозначают маршруты автобусов. Кружки обозначают остановки.</p>
 </section>
 
 <section class="panel">
 <h2>Поиск автобуса / передача смены</h2>
 <input id="busSearch" placeholder="Бортовой номер">
 <button onclick="trackBus()">Найти автобус</button>
+<button id="stopTrackingButton" onclick="stopTracking()">Остановить слежение</button>
 <p id="handoverStatus" class="status">Введи бортовой номер.</p>
 </section>
 
@@ -397,6 +407,14 @@ function addRoute(){
 
 function removeRoute(v){
  selectedRoutes=selectedRoutes.filter(x=>x!==v);
+
+ if(trackedBus&&markers[trackedBus]){
+  const route=String(markers[trackedBus].busRoute||'');
+  if(!selectedRoutes.includes(route)){
+   stopTracking();
+  }
+ }
+
  renderRoutes();
  loadSelectedRouteFiles().then(updateBuses);
 }
@@ -444,7 +462,6 @@ function distanceMeters(a,b){
  return 2*R*Math.atan2(Math.sqrt(x),Math.sqrt(1-x));
 }
 
-/* Ищем ближайшую остановку только среди остановок нужного маршрута */
 function findNearestStop(pos,route){
  const files=routeFiles[route]||[];
  const routeStopIds=new Set();
@@ -498,7 +515,6 @@ function normalizeDestination(value){
   .replace(/[^a-zа-яё0-9]/gi,'');
 }
 
-/* Сравнение расписания у ближайшей остановки маршрута */
 function getScheduleStatus(bus,route,pos){
  if(!timetableReady)return null;
 
@@ -537,7 +553,6 @@ function getScheduleStatus(bus,route,pos){
 
    if(!active)return;
 
-   /* По возможности выбираем рейс с нужной конечной остановкой */
    const headsign=normalizeDestination(trip.headsign||'');
    const directionMatch=destination&&headsign&&
     (headsign.includes(destination)||destination.includes(headsign));
@@ -560,7 +575,6 @@ function getScheduleStatus(bus,route,pos){
    const difference=now-adjusted;
    const absolute=Math.abs(difference);
 
-   /* Слишком далёкое время не считаем подходящим рейсом */
    if(absolute>1800)return;
 
    const candidate={
@@ -611,11 +625,98 @@ function makeIcon(route,heading,color){
   html:
    '<div class="bus-icon" style="background:'+color+'">'+
    '<span class="arrow" style="transform:rotate('+angle+'deg)">↑</span>'+
-   '<span class="number">'+route+'</span>'+
+   '<span class="number">'+escapeHtml(route)+'</span>'+
    '</div>',
   iconSize:[48,48],
   iconAnchor:[24,24]
  });
+}
+
+function makeBusPopup(bus,id,route,heading,schedule){
+ const destination=bus.destination||'Не указано';
+
+ let scheduleText='Расписание: пока не проверяется. Нажми на глаз, чтобы включить слежение.';
+
+ if(id===trackedBus){
+  if(schedule){
+   scheduleText='Расписание: '+schedule.label+'<br>'+
+    'Ближайшая остановка: '+escapeHtml(schedule.stop)+
+    ' ('+schedule.distance+' м)'+
+    (schedule.headsign?
+     '<br>Конечная рейса: '+escapeHtml(schedule.headsign):'');
+  }else{
+   scheduleText='Расписание: нет данных рядом с остановкой маршрута';
+  }
+
+  if(!timetableReady){
+   scheduleText='Расписание ещё загружается';
+  }
+ }
+
+ let eyeButton='';
+
+ if(id!==trackedBus){
+  eyeButton=
+   '<button class="eye-button" onclick="startTracking(\''+
+   escapeHtml(id)+'\')">👁 Включить слежение</button>';
+ }else{
+  eyeButton=
+   '<button class="eye-button" onclick="stopTracking()">Остановить слежение</button>';
+ }
+
+ return '<div class="popup-info">'+
+  '<b>Автобус № '+escapeHtml(route)+'</b><br>'+
+  'Бортовой номер: '+escapeHtml(id)+'<br>'+
+  'Конечная остановка: '+escapeHtml(destination)+'<br>'+
+  'Направление: '+heading+'°<br>'+
+  'GPS: активен<br>'+scheduleText+
+  eyeButton+
+  '</div>';
+}
+
+function startTracking(id){
+ id=String(id);
+
+ if(!markers[id]){
+  document.getElementById('trackingStatus').textContent=
+   'Автобус больше не найден. Выбери другой.';
+  return;
+ }
+
+ trackedBus=id;
+
+ map.closePopup();
+ map.setView(markers[id].getLatLng(),15);
+
+ document.getElementById('trackingStatus').textContent=
+  'Слежение включено: бортовой номер '+id;
+
+ document.getElementById('handoverStatus').textContent=
+  'Слежение за автобусом '+id+' включено.';
+
+ document.getElementById('stopTrackingButton').style.display='block';
+
+ updateBuses();
+}
+
+function stopTracking(){
+ const old=trackedBus;
+ trackedBus='';
+
+ document.getElementById('trackingStatus').textContent=
+  'Слежение остановлено. Все автобусы снова серые.';
+
+ document.getElementById('stopTrackingButton').style.display='none';
+
+ if(old&&markers[old]){
+  markers[old].setIcon(makeIcon(
+   markers[old].busRoute,
+   markers[old].busHeading,
+   COLORS.gray
+  ));
+ }
+
+ updateBuses();
 }
 
 async function updateBuses(){
@@ -655,29 +756,19 @@ async function updateBuses(){
 
    active.add(id);
 
-   const schedule=getScheduleStatus(bus,route,pos);
-   const color=schedule?COLORS[schedule.color]:COLORS.gray;
+   let schedule=null;
 
-   const destination=bus.destination||'Не указано';
-
-   let scheduleText='Расписание: нет данных рядом с остановкой маршрута';
-
-   if(schedule){
-    scheduleText='Расписание: '+schedule.label+'<br>'+
-     'Ближайшая остановка: '+escapeHtml(schedule.stop)+
-     ' ('+schedule.distance+' м)'+
-     (schedule.headsign?
-      '<br>Конечная рейса: '+escapeHtml(schedule.headsign):'');
-   }else if(!timetableReady){
-    scheduleText='Расписание ещё загружается';
+   /* Расписание проверяем только для выбранного автобуса */
+   if(id===trackedBus){
+    schedule=getScheduleStatus(bus,route,pos);
    }
 
-   const popup=
-    '<b>Автобус № '+route+'</b><br>'+
-    'Бортовой номер: '+escapeHtml(id)+'<br>'+
-    'Конечная остановка: '+escapeHtml(destination)+'<br>'+
-    'Направление: '+heading+'°<br>'+
-    'GPS: активен<br>'+scheduleText;
+   const color=id===trackedBus&&schedule?
+    COLORS[schedule.color]:COLORS.gray;
+
+   const popup=makeBusPopup(
+    bus,id,route,heading,schedule
+   );
 
    const icon=makeIcon(route,heading,color);
 
@@ -690,12 +781,22 @@ async function updateBuses(){
      .addTo(map)
      .bindPopup(popup);
    }
+
+   markers[id].busRoute=route;
+   markers[id].busHeading=heading;
   });
 
   Object.keys(markers).forEach(id=>{
    if(!active.has(id)){
     map.removeLayer(markers[id]);
     delete markers[id];
+
+    if(trackedBus===id){
+     trackedBus='';
+     document.getElementById('trackingStatus').textContent=
+      'Выбранный автобус исчез из GPS. Слежение остановлено.';
+     document.getElementById('stopTrackingButton').style.display='none';
+    }
    }
   });
 
@@ -705,7 +806,7 @@ async function updateBuses(){
    '. Маршруты: '+selectedRoutes.join(', ');
 
   if(trackedBus&&markers[trackedBus]){
-   map.setView(markers[trackedBus].getLatLng(),15);
+   map.panTo(markers[trackedBus].getLatLng());
   }
 
  }catch(error){
@@ -725,10 +826,9 @@ function trackBus(){
  }
 
  if(markers[id]){
-  trackedBus=id;
   map.setView(markers[id].getLatLng(),16);
   markers[id].openPopup();
-  info.textContent='Автобус найден. Отслеживание включено.';
+  info.textContent='Автобус найден. Для слежения нажми на значок глаза.';
  }else{
   info.textContent='Автобус не найден среди выбранных маршрутов.';
  }
