@@ -92,7 +92,7 @@ async function updateBuses(){
  if(busy||Date.now()<gpsNextAllowed)return;
  busy=true;
  try{
-  const r=await fetch('https://proxy.cors.dev/https://nordapi.ee/api/v1/estonian-transport/tlt/vehicles',{cache:'no-store',credentials:'omit'});
+  const r=await fetch('https://flat-grass-8d0e.igortltvare.workers.dev',{cache:'no-store',credentials:'omit'});
   if(r.status===429){
    let retry=Number(r.headers.get('Retry-After'));
    if(!Number.isFinite(retry)||retry<=0)retry=60;
