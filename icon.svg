@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <rect width="512" height="512" rx="100" fill="#102747"/>
+  <rect x="76" y="65" width="360" height="382" rx="75" fill="#00a6a6"/>
+  <rect x="125" y="105" width="262" height="245" rx="45" fill="#ffffff"/>
+  <rect x="150" y="132" width="212" height="105" rx="20" fill="#102747"/>
+  <text x="256" y="198" text-anchor="middle" font-family="Arial" font-size="42" font-weight="bold" fill="#ffffff">TALLINN</text>
+  <rect x="155" y="258" width="65" height="55" rx="12" fill="#00a6a6"/>
+  <rect x="238" y="258" width="65" height="55" rx="12" fill="#00a6a6"/>
+  <rect x="321" y="258" width="40" height="55" rx="10" fill="#00a6a6"/>
+  <circle cx="175" cy="380" r="35" fill="#102747"/>
+  <circle cx="337" cy="380" r="35" fill="#102747"/>
+  <circle cx="175" cy="380" r="15" fill="#ffffff"/>
+  <circle cx="337" cy="380" r="15" fill="#ffffff"/>
+</svg>
