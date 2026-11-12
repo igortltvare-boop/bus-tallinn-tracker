@@ -1,0 +1,17 @@
+{
+  "name": "Tallinn Bus Tracker",
+  "short_name": "Tallinn Bus",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#102747",
+  "theme_color": "#102747",
+  "icons": [
+    {
+      "src": "icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}
